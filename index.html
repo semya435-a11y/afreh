@@ -444,7 +444,7 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
 <canvas id="bkCanvas"></canvas>
 
 <script>
-// Простые светлячки на фоне
+// Фон (светлячки)
 (function() {
   const c = document.getElementById('bgCanvas');
   if (!c) return;
@@ -472,7 +472,7 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
   draw();
 })();
 
-// Главный скрипт
+// Основной скрипт
 (function () {
   "use strict";
   
@@ -487,13 +487,17 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
   let viewDate = new Date();
   let bookedCache = { "1": [], "2": [] };
 
-  // 1. Функция перехода к датам
-  function showStep2() {
-    const el = $("step2");
-    if (el) {
-      el.classList.add("visible");
-      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
-    }
+  // 1. Загрузка броней
+  async function loadBookings() {
+    try {
+      const res = await fetch(CONFIG.submitUrl + "?action=list&_=" + Date.now());
+      const data = await res.json();
+      if (data && data.ok && data.booked) bookedCache = data.booked;
+    } catch (e) { console.warn("loadBookings error:", e); }
+  }
+
+  function isBooked(houseId, iso) {
+    return bookedCache[houseId] && bookedCache[houseId].indexOf(iso) !== -1;
   }
 
   // 2. Отрисовка календаря
@@ -534,7 +538,7 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
       if (iso < todayStr) btn.classList.add("past");
       if (iso === state.date) btn.classList.add("selected");
       
-      if (bookedCache[state.house] && bookedCache[state.house].indexOf(iso) !== -1) { 
+      if (isBooked(state.house, iso)) { 
         btn.classList.add("disabled"); 
         btn.disabled = true; 
       }
@@ -550,9 +554,11 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
         const step3 = $("step3");
         if (step3) step3.classList.add("visible");
         
-        // Обновляем текст
-        const dateLbl = $("bkDateLabel");
-        if (dateLbl) dateLbl.textContent = d + "." + String(month+1).padStart(2,"0") + "." + year;
+        // Подсчет суммы
+        recalc();
+        
+        // Обновляем шаги
+        updateProgress();
         
         // Прокрутка к форме
         setTimeout(() => { if (step3) step3.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
@@ -571,13 +577,13 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
     }
   }
 
-  // 3. Навешиваем обработчики на кнопки календаря
+  // 3. Кнопки календаря
   const pBtn = $("calPrev");
   const nBtn = $("calNext");
   if (pBtn) pBtn.onclick = function() { viewDate.setMonth(viewDate.getMonth() - 1); renderCalendar(); };
   if (nBtn) nBtn.onclick = function() { viewDate.setMonth(viewDate.getMonth() + 1); renderCalendar(); };
 
-  // 4. Навешиваем обработчики на карточки домиков
+  // 4. Карточки домиков
   const cards = document.querySelectorAll(".house-card");
   for (let i = 0; i < cards.length; i++) {
     cards[i].onclick = function() {
@@ -588,11 +594,15 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
       
       // Показываем календарь
       renderCalendar();
-      showStep2();
+      const step2 = $("step2");
+      if (step2) {
+        step2.classList.add("visible");
+        setTimeout(() => step2.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+      }
     };
   }
 
-  // 5. Обработчики для услуг
+  // 5. Услуги
   const servs = document.querySelectorAll(".bk-serv");
   for (let i = 0; i < servs.length; i++) {
     servs[i].onclick = function() {
@@ -600,10 +610,115 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
       this.classList.add("active");
       state.service = this.getAttribute("data-service");
       state.servicePrice = parseInt(this.getAttribute("data-price")) || 0;
+      
+      // Обновляем визуальный блок услуг
+      const serviceLabel = $("spLabel");
+      if (serviceLabel) {
+        serviceLabel.textContent = this.querySelector(".bk-serv-name").textContent;
+      }
+      recalc();
     };
   }
 
-  // 6. Отправка формы
+  // 6. Гости
+  const guestsSel = $("bkGuests");
+  if (guestsSel) {
+    guestsSel.onchange = function() {
+      state.guests = parseInt(this.value) || 2;
+      recalc();
+    };
+  }
+
+  // 7. Подсчет суммы
+  function recalc() {
+    const houseLabel = $("bkHouseLabel");
+    const basePriceEl = $("bkBasePrice");
+    const dateLabel = $("bkDateLabel");
+    const guestsRow = $("bkGuestsRow");
+    const guestsPriceEl = $("bkGuestsPrice");
+    const serviceRow = $("bkServiceRow");
+    const servicePriceEl = $("bkServicePrice");
+    const totalEl = $("bkTotal");
+    const dayHint = $("bkDayHint");
+    
+    if (!houseLabel) return 0;
+    
+    const h = CONFIG.houses[state.house];
+    houseLabel.textContent = h.name;
+    
+    if (!state.date) {
+      if (basePriceEl) basePriceEl.textContent = "—"; 
+      if (totalEl) totalEl.textContent = "0 Br"; 
+      if (dateLabel) dateLabel.textContent = "—";
+      if (dayHint) { dayHint.textContent = "Выберите дату"; dayHint.className = "bk-hint"; }
+      return 0;
+    }
+    
+    const d = new Date(state.date + "T12:00:00");
+    const day = d.getDay();
+    const isWeekend = day === 0 || day === 6;
+    const base = isWeekend ? h.priceWeekend : h.priceWeekday;
+    const guestsExtra = Math.max(0, state.guests - CONFIG.baseGuests) * CONFIG.guestExtra;
+    const total = base + guestsExtra + state.servicePrice;
+    
+    const money = (n) => n.toLocaleString("ru-RU") + " Br";
+    
+    if (basePriceEl) basePriceEl.textContent = money(base);
+    if (dateLabel) dateLabel.textContent = d.toLocaleDateString("ru-RU", { day: 'numeric', month: 'long' });
+    
+    if (state.guests > CONFIG.baseGuests) { 
+      if (guestsRow) guestsRow.style.display = "flex"; 
+      if (guestsPriceEl) guestsPriceEl.textContent = money(guestsExtra); 
+    } else { 
+      if (guestsRow) guestsRow.style.display = "none"; 
+    }
+    
+    if (state.servicePrice > 0) { 
+      if (serviceRow) serviceRow.style.display = "flex"; 
+      if (servicePriceEl) servicePriceEl.textContent = money(state.servicePrice); 
+    } else { 
+      if (serviceRow) serviceRow.style.display = "none"; 
+    }
+    
+    if (totalEl) totalEl.textContent = money(total);
+    
+    if (dayHint) {
+      dayHint.textContent = `🗓 ${d.toLocaleDateString("ru-RU")} — ${isWeekend ? "выходной" : "будний"}`;
+      dayHint.className = "bk-hint " + (isWeekend ? "weekend" : "weekday");
+    }
+    return total;
+  }
+
+  // 8. Прогресс-бар
+  function updateProgress() {
+    const progressSteps = document.querySelectorAll(".progress-step");
+    const line1 = $("line1");
+    const line2 = $("line2");
+    if (!progressSteps.length) return;
+    
+    const hasHouse = !!state.house;
+    const hasDate = !!state.date;
+    
+    progressSteps.forEach(s => s.classList.remove("active", "done"));
+    if (line1) line1.classList.remove("done");
+    if (line2) line2.classList.remove("done");
+    
+    if (hasDate) {
+      progressSteps[0].classList.add("done"); 
+      progressSteps[1].classList.add("done"); 
+      progressSteps[2].classList.add("active");
+      if (line1) line1.classList.add("done"); 
+      if (line2) line2.classList.add("done");
+    } else if (hasHouse) {
+      progressSteps[0].classList.add("done"); 
+      progressSteps[1].classList.add("active");
+      if (line1) line1.classList.add("done");
+    } else { 
+      progressSteps[0].classList.add("active"); 
+    }
+  }
+
+  // 9. Отправка формы
   const form = $("bkForm");
   if (form) {
     form.onsubmit = function(e) {
@@ -612,33 +727,46 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
       const nameInput = $("bkName");
       const phoneInput = $("bkPhone");
       const agreeCheck = $("agreeCheck");
+      const agreeBox = $("agreeBox");
       
       if (!state.date) { alert("Выберите дату!"); return; }
       if (!nameInput.value || !phoneInput.value) { alert("Заполните имя и телефон!"); return; }
-      if (!agreeCheck.checked) { alert("Поставьте галочку согласия с правилами!"); return; }
+      if (!agreeCheck.checked) { 
+        agreeBox.classList.add("error");
+        alert("Поставьте галочку согласия с правилами!"); 
+        return; 
+      }
 
       const btn = $("bkSubmit");
       btn.textContent = "Отправка...";
       btn.disabled = true;
 
-      const fd = new FormData();
+      const fd = new URLSearchParams();
       fd.append("date", state.date);
       fd.append("house", state.house);
       fd.append("name", nameInput.value);
       fd.append("phone", phoneInput.value);
+      fd.append("instagram", $("bkInsta").value || "");
       fd.append("guests", state.guests);
       fd.append("serviceLabel", state.service);
-      fd.append("total", "0");
+      fd.append("total", $("bkTotal").textContent.replace(/[^\d]/g, ""));
 
       fetch(CONFIG.submitUrl, {
         method: "POST",
         mode: "no-cors",
-        body: new URLSearchParams(fd)
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: fd.toString()
       }).then(() => {
-        alert("Заявка отправлена! Мы свяжемся с вами.");
+        alert("✅ Заявка отправлена! Внесите предоплату 100 Br. Мы свяжемся с вами.");
         form.reset();
+        agreeCheck.checked = false;
+        agreeBox.classList.remove("error");
+        state.date = "";
         btn.textContent = "✅ Забронировать";
         btn.disabled = false;
+        renderCalendar();
+        recalc();
+        updateProgress();
       }).catch(() => {
         alert("Ошибка отправки. Проверьте интернет.");
         btn.textContent = "✅ Забронировать";
@@ -649,6 +777,9 @@ body { background: #0a0f0a; background-image: radial-gradient(ellipse at 20% 0%,
 
   // Инициализация
   renderCalendar();
+  recalc();
+  updateProgress();
+  loadBookings().then(() => renderCalendar());
 
 })();
 </script>
